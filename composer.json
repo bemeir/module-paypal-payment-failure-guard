@@ -1,0 +1,30 @@
+{
+    "name": "magetu/module-paypal-payment-failure-guard",
+    "description": "Stops an unauthenticated caller from making a Magento 2 or Adobe Commerce store email itself payment-failed merchant notifications through core Magento_PaypalGraphQl, without disabling the module.",
+    "type": "magento2-module",
+    "license": "MIT",
+    "keywords": ["magento", "magento2", "mage-os", "module", "security", "graphql", "paypal", "payflow"],
+    "authors": [
+        {
+            "name": "Magetu"
+        }
+    ],
+    "require": {
+        "php": "~8.1.0 || ~8.2.0 || ~8.3.0 || ~8.4.0 || ~8.5.0",
+        "magento/framework": "^103.0",
+        "magento/module-quote": "^101.2",
+        "magento/module-paypal": "^101.0",
+        "magento/module-paypal-graph-ql": "^100.4"
+    },
+    "require-dev": {
+        "phpunit/phpunit": ">=9.6.33 <10 || >=10.5.62 <11 || >=12.5.8 <13"
+    },
+    "autoload": {
+        "files": [
+            "registration.php"
+        ],
+        "psr-4": {
+            "Magetu\\PaypalPaymentFailureGuard\\": ""
+        }
+    }
+}
