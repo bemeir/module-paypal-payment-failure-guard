@@ -4,42 +4,38 @@ declare(strict_types=1);
 
 namespace Magetu\PaypalPaymentFailureGuard\Plugin\Resolver;
 
-use Magento\Framework\Exception\NoSuchEntityException;
 use Magento\Framework\GraphQl\Config\Element\Field;
 use Magento\Framework\GraphQl\Exception\GraphQlInputException;
 use Magento\Framework\GraphQl\Schema\Type\ResolveInfo;
 use Magento\PaypalGraphQl\Model\Resolver\PayflowProResponse;
-use Magento\Quote\Api\PaymentMethodManagementInterface;
-use Magento\Quote\Model\MaskedQuoteIdToQuoteIdInterface;
+use Magento\QuoteGraphQl\Model\Cart\GetCartForUser;
 
 /**
- * Gate the PayflowPro merchant "payment failed" notification behind a genuine Payflow payment context.
+ * Require an authorized cart with an enabled Payflow method before processing a response.
  *
- * Core PayflowProResponse::resolve() loads the cart from the caller-supplied masked cart_id (not the
- * session) and, on any validation failure of paypal_payload, calls PaymentFailuresInterface::handle(),
- * which emails the merchant. An unauthenticated caller can therefore make the store email itself by
- * pointing a garbage payload at an empty cart created via createEmptyCart, with no payment ever selected
- * on that cart. The legitimate Payflow Pro GraphQL flow always selects a Payflow method
- * (setPaymentMethodOnCart, then createPayflowProToken) before this resolver runs, so the request is
- * refused before the resolver runs unless the cart's selected payment method is a Payflow method. A
- * genuine Payflow decline still carries a Payflow method and still notifies.
+ * A selected method is a prerequisite, not proof that the payload came from the gateway.
  */
 class PayflowProResponseGuard
 {
+    private readonly GetCartForUser $getCartForUser;
+
+    /** @var string[] */
+    private readonly array $allowedPaymentMethods;
+
     /**
-     * @param MaskedQuoteIdToQuoteIdInterface $maskedQuoteIdToQuoteId
-     * @param PaymentMethodManagementInterface $paymentMethodManagement
+     * @param GetCartForUser $getCartForUser
      * @param string[] $allowedPaymentMethods
      */
     public function __construct(
-        private readonly MaskedQuoteIdToQuoteIdInterface $maskedQuoteIdToQuoteId,
-        private readonly PaymentMethodManagementInterface $paymentMethodManagement,
-        private readonly array $allowedPaymentMethods = []
+        GetCartForUser $getCartForUser,
+        array $allowedPaymentMethods = []
     ) {
+        $this->getCartForUser = $getCartForUser;
+        $this->allowedPaymentMethods = $allowedPaymentMethods;
     }
 
     /**
-     * Refuse the resolver before it runs unless the cart is in a genuine Payflow payment context.
+     * Check cart access before inspecting payment state or entering core's notification path.
      *
      * @param PayflowProResponse $subject
      * @param Field $field
@@ -59,33 +55,31 @@ class PayflowProResponseGuard
         ?array $value = null,
         ?array $args = null
     ): void {
-        $maskedCartId = (string)($args['input']['cart_id'] ?? '');
-        $paypalPayload = (string)($args['input']['paypal_payload'] ?? '');
-
-        // Let the resolver own its own input validation and cart-not-found errors; only guard a
-        // well-formed request, which is the only shape that can reach the notification in core.
-        if ($maskedCartId === '' || $paypalPayload === '') {
+        // Match core's empty() checks, including the string "0". GraphQL validates scalar types.
+        if (empty($args['input']['cart_id']) || empty($args['input']['paypal_payload'])) {
             return;
         }
 
-        try {
-            $quoteId = $this->maskedQuoteIdToQuoteId->execute($maskedCartId);
-            $payment = $this->paymentMethodManagement->get($quoteId);
-        } catch (NoSuchEntityException $e) {
-            // An invalid cart never reaches the notification in core either, so let the resolver throw.
-            return;
+        $storeId = (int)$context->getExtensionAttributes()->getStore()->getId();
+        $cart = $this->getCartForUser->execute(
+            $args['input']['cart_id'],
+            $context->getUserId(),
+            $storeId
+        );
+
+        // Use the authorized cart. GetCartForUser preserves core's ownership, active-cart and
+        // website checks, including permitted same-website store/currency changes.
+        $payment = $cart->getPayment();
+        $method = $payment !== null ? (string)$payment->getMethod() : '';
+        if ($method === '' || !in_array($method, $this->allowedPaymentMethods, true)) {
+            throw new GraphQlInputException(__('Transaction has been declined.'));
         }
 
-        // PaymentMethodManagement::get() returns null (it does not throw) for a quote with no payment,
-        // so the empty-cart abuse lands here: an empty method fails the allow-list and is refused. The
-        // NoSuchEntityException catch above only covers a genuinely missing cart.
-        $method = ($payment !== null) ? (string)$payment->getMethod() : '';
-        if (in_array($method, $this->allowedPaymentMethods, true)) {
-            return;
+        // Quote\Payment::getMethodInstance() sets the quote's store on the method. Native isActive()
+        // supports both Payflow Pro / Payments Pro configuration and the vault's provider + switch.
+        // Do not use isAvailable(): this is a response to an existing attempt, not method selection.
+        if (!$payment->getMethodInstance()->isActive((int)$cart->getStoreId())) {
+            throw new GraphQlInputException(__('Transaction has been declined.'));
         }
-
-        // No genuine Payflow payment selected on this cart, so refuse before the resolver runs and it
-        // never reaches the merchant notification.
-        throw new GraphQlInputException(__('Transaction has been declined.'));
     }
 }

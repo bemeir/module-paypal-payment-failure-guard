@@ -1,10 +1,8 @@
 <?xml version="1.0"?>
 <config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="urn:magento:framework:ObjectManager/etc/config.xsd">
     <!--
-        Primary guard: only let the PayflowPro response resolver run - and therefore only let it notify
-        the merchant of a payment failure - when the cart is in a genuine Payflow payment context, i.e.
-        it has a Payflow payment method selected (set by setPaymentMethodOnCart before this resolver in
-        the legitimate flow). Extend allowedPaymentMethods for other transparent-redirect gateways.
+        Authorize the cart, then require an allowed payment method that is active in its store.
+        Extend allowedPaymentMethods only for gateways that use this resolver's response protocol.
     -->
     <type name="Magetu\PaypalPaymentFailureGuard\Plugin\Resolver\PayflowProResponseGuard">
         <arguments>
